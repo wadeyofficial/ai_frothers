@@ -1,0 +1,699 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Office Beer Delivery Game - Ultimate Edition</title>
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      overflow: hidden;
+      background: #222;
+      color: #fff;
+      font-family: sans-serif;
+    }
+    #overlay, #hud {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      text-align: center;
+      z-index: 10;
+    }
+    #overlay {
+      top: 40%;
+      font-size: 2em;
+      color: #ff0;
+    }
+    #hud {
+      top: 10px;
+    }
+    #scoreDisplay, #timerDisplay {
+      font-size: 1.5em;
+      margin: 0.5em;
+      display: inline-block;
+    }
+  </style>
+</head>
+<body>
+  <!-- The overlay now includes a header with the extra message -->
+  <div id="overlay">
+    <h2>Help Tim Berry race to hand every AI Frother a beer before it's too late! There's a trillion dollars on the line!</h2>
+    <p>Click to Start – WASD to move, Mouse to look, Space Bar to hand over beer</p>
+  </div>
+  <div id="hud">
+    <span id="scoreDisplay">$0</span>
+    <span id="timerDisplay">1:00</span>
+  </div>
+  
+  <!-- Audio elements (placeholders) -->
+  <audio id="soundCash" src="data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAESsAAAB3AQACABAAZGF0YQgAAAAA" preload="auto"></audio>
+  <audio id="soundBeer" src="data:audio/wav;base64,UklGRjQAAABXQVZFZm10IBAAAAABAAEAIlYAAESsAAACABAAZGF0YRAAAAAA" preload="auto"></audio>
+  
+  <!-- Include Three.js -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r134/three.min.js"></script>
+  
+  <script>
+    // -------------------------------
+    // Global Settings
+    // -------------------------------
+    let gameOver = false;
+    const TOTAL_WORKERS = 100;
+    const KEEN_COUNT = 21; // exactly 21 keen workers
+    let cashDrops = [];
+    const COUNTDOWN_SECONDS = 60;
+    let startTime = null;  // Timer start (set on pointer lock)
+
+    // -------------------------------
+    // Helper: Create a label sprite with given text.
+    // -------------------------------
+    function createLabel(text) {
+      const canvas = document.createElement("canvas");
+      canvas.width = 256;
+      canvas.height = 128;
+      const context = canvas.getContext("2d");
+      context.fillStyle = "white";
+      context.font = "Bold 48px Arial";
+      context.textAlign = "center";
+      context.fillText(text, canvas.width / 2, canvas.height / 2 + 16);
+      const texture = new THREE.CanvasTexture(canvas);
+      const material = new THREE.SpriteMaterial({ map: texture, transparent: true });
+      const sprite = new THREE.Sprite(material);
+      sprite.scale.set(1, 0.5, 1);
+      return sprite;
+    }
+    
+    // -------------------------------
+    // Helper: Create a tangram-inspired decoration texture.
+    // -------------------------------
+    function createTangramTexture(phrase) {
+      const canvas = document.createElement("canvas");
+      canvas.width = 512;
+      canvas.height = 512;
+      const ctx = canvas.getContext("2d");
+      ctx.fillStyle = "#808080";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      const squareSize = 128;
+      const squareX = (canvas.width - squareSize) / 2;
+      const squareY = (canvas.height - squareSize) / 2;
+      ctx.fillStyle = "#FF0000";
+      ctx.fillRect(squareX, squareY, squareSize, squareSize);
+      ctx.fillStyle = "#707070";
+      ctx.beginPath();
+      ctx.moveTo(0, 0);
+      ctx.lineTo(256, 0);
+      ctx.lineTo(0, 256);
+      ctx.closePath();
+      ctx.fill();
+      ctx.beginPath();
+      ctx.moveTo(canvas.width, canvas.height);
+      ctx.lineTo(canvas.width, 256);
+      ctx.lineTo(256, canvas.height);
+      ctx.closePath();
+      ctx.fill();
+      ctx.fillStyle = "white";
+      ctx.font = "Bold 48px Arial";
+      ctx.textAlign = "center";
+      ctx.fillText(phrase, canvas.width/2, canvas.height - 50);
+      return new THREE.CanvasTexture(canvas);
+    }
+    
+    // -------------------------------
+    // Helper: Add a wall decoration.
+    // -------------------------------
+    function addWallDecoration(phrase, pos, rot) {
+      const texture = createTangramTexture(phrase);
+      const geometry = new THREE.PlaneGeometry(6, 3);
+      const material = new THREE.MeshBasicMaterial({ map: texture, side: THREE.DoubleSide });
+      const mesh = new THREE.Mesh(geometry, material);
+      mesh.position.copy(pos);
+      mesh.rotation.set(rot.x, rot.y, rot.z);
+      scene.add(mesh);
+    }
+    
+    // -------------------------------
+    // Scene, Camera, Renderer Setup
+    // -------------------------------
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(75, window.innerWidth/window.innerHeight, 0.1, 1000);
+    camera.position.set(0, 1.6, 0);
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    document.body.appendChild(renderer.domElement);
+    
+    // -------------------------------
+    // Create Floor and Walls
+    // -------------------------------
+    const floorGeometry = new THREE.PlaneGeometry(50, 50);
+    const floorMaterial = new THREE.MeshBasicMaterial({ color: 0x888888 });
+    const floor = new THREE.Mesh(floorGeometry, floorMaterial);
+    floor.rotation.x = -Math.PI/2;
+    scene.add(floor);
+    const wallMaterial = new THREE.MeshBasicMaterial({ color: 0x444444 });
+    const wallGeometry = new THREE.PlaneGeometry(50, 3);
+    const wall1 = new THREE.Mesh(wallGeometry, wallMaterial);
+    wall1.position.set(0, 1.5, -25);
+    wall1.rotation.y = Math.PI;
+    scene.add(wall1);
+    const wall2 = new THREE.Mesh(wallGeometry, wallMaterial);
+    wall2.position.set(0, 1.5, 25);
+    scene.add(wall2);
+    const wall3 = new THREE.Mesh(wallGeometry, wallMaterial);
+    wall3.position.set(-25, 1.5, 0);
+    wall3.rotation.y = -Math.PI/2;
+    scene.add(wall3);
+    const wall4 = new THREE.Mesh(wallGeometry, wallMaterial);
+    wall4.position.set(25, 1.5, 0);
+    wall4.rotation.y = Math.PI/2;
+    scene.add(wall4);
+    
+    // -------------------------------
+    // Add Wall Decorations
+    // -------------------------------
+    addWallDecoration("OneTibra", new THREE.Vector3(0, 2, -24.9), new THREE.Euler(0, 0, 0));
+    addWallDecoration("Capture All Data", new THREE.Vector3(0, 2, 24.9), new THREE.Euler(0, Math.PI, 0));
+    addWallDecoration("Measure Everything", new THREE.Vector3(24.9, 2, 0), new THREE.Euler(0, -Math.PI/2, 0));
+    addWallDecoration("Automate Everything", new THREE.Vector3(-24.9, 2, 0), new THREE.Euler(0, Math.PI/2, 0));
+    addWallDecoration("We Stand on the Shoulders of Others", new THREE.Vector3(24.9, 2, -24.9), new THREE.Euler(0, -Math.PI/4, 0));
+    addWallDecoration("Move!", new THREE.Vector3(-24.9, 2, 24.9), new THREE.Euler(0, Math.PI/4, 0));
+    
+    // -------------------------------
+    // High-Res Beer Mug Model with Handle, Foamy Top, Rising Bubbles and Dribbling Droplets
+    // -------------------------------
+    function createBeerObject() {
+      const beerGroup = new THREE.Group();
+      const outerRadius = 0.15;
+      const innerRadius = 0.12;
+      const mugHeight = 0.3;
+      
+      const mugShape = new THREE.Shape();
+      mugShape.absarc(0, 0, outerRadius, 0, Math.PI * 2, false);
+      const holePath = new THREE.Path();
+      holePath.absarc(0, 0, innerRadius, 0, Math.PI * 2, true);
+      mugShape.holes.push(holePath);
+      
+      const extrudeSettings = { steps: 1, depth: mugHeight, bevelEnabled: false };
+      let mugGeometry = new THREE.ExtrudeGeometry(mugShape, extrudeSettings);
+      mugGeometry.rotateX(-Math.PI / 2);
+      mugGeometry.translate(0, 0, 0);
+      
+      const mugMaterial = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.2, metalness: 0.1 });
+      const mugMesh = new THREE.Mesh(mugGeometry, mugMaterial);
+      beerGroup.add(mugMesh);
+      
+      const beerHeight = mugHeight - 0.05;
+      const beerGeometry = new THREE.CylinderGeometry(innerRadius * 0.95, innerRadius * 0.95, beerHeight, 32);
+      const beerMaterial = new THREE.MeshStandardMaterial({ color: 0xFFA500, roughness: 0.3 });
+      const beerMesh = new THREE.Mesh(beerGeometry, beerMaterial);
+      beerMesh.position.y = beerHeight / 2;
+      beerGroup.add(beerMesh);
+      
+      const foamRadius = innerRadius * 1.1;
+      const foamGeometry = new THREE.SphereGeometry(foamRadius, 16, 8, 0, Math.PI * 2, 0, Math.PI / 2);
+      const foamMaterial = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.8 });
+      const foamMesh = new THREE.Mesh(foamGeometry, foamMaterial);
+      foamMesh.position.y = beerHeight;
+      beerGroup.add(foamMesh);
+      
+      const handleStart = new THREE.Vector3(outerRadius, mugHeight * 0.75, 0);
+      const handleEnd = new THREE.Vector3(outerRadius, mugHeight * 0.25, 0);
+      const handleMid = new THREE.Vector3(outerRadius + 0.25, mugHeight * 0.5, 0);
+      const handleCurve = new THREE.QuadraticBezierCurve3(handleStart, handleMid, handleEnd);
+      const handleGeometry = new THREE.TubeGeometry(handleCurve, 20, 0.02, 8, false);
+      const handleMaterial = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.2 });
+      const handleMesh = new THREE.Mesh(handleGeometry, handleMaterial);
+      beerGroup.add(handleMesh);
+      
+      const bubbleGroup = new THREE.Group();
+      const bubbleMaterial = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.1 });
+      const bubbleSizes = [0.004, 0.005, 0.007, 0.009];
+      const bubbleGeometries = bubbleSizes.map(size => new THREE.SphereGeometry(size, 8, 6));
+      for (let i = 0; i < 30; i++) {
+        const geo = bubbleGeometries[Math.floor(Math.random() * bubbleGeometries.length)];
+        const bubble = new THREE.Mesh(geo, bubbleMaterial);
+        const angle = Math.random() * 2 * Math.PI;
+        const r = Math.random() * foamRadius * 0.8;
+        const x = r * Math.cos(angle);
+        const z = r * Math.sin(angle);
+        const y = beerHeight + foamRadius + Math.random() * 0.05;
+        bubble.position.set(x, y, z);
+        bubbleGroup.add(bubble);
+      }
+      beerGroup.add(bubbleGroup);
+      
+      const dribbleGroup = new THREE.Group();
+      const dripGeometry = new THREE.SphereGeometry(0.005, 8, 6);
+      for (let i = 0; i < 5; i++) {
+        const drip = new THREE.Mesh(dripGeometry, bubbleMaterial);
+        const angle = Math.random() * 2 * Math.PI;
+        const x = Math.cos(angle) * outerRadius;
+        const z = Math.sin(angle) * outerRadius;
+        const y = beerHeight + Math.random() * 0.1;
+        drip.position.set(x, y, z);
+        dribbleGroup.add(drip);
+      }
+      beerGroup.add(dribbleGroup);
+      
+      beerGroup.userData.bubbleGroup = bubbleGroup;
+      beerGroup.userData.dribbleGroup = dribbleGroup;
+      
+      return beerGroup;
+    }
+    
+    // -------------------------------
+    // High-Res Worker Model with Higher Resolution, Height Variation & Hair
+    // All workers now have hair.
+    // Males and standard females get a hemisphere hair.
+    // Females in the long hair variant get a triangle-shaped torso plus both a hemisphere hair and an extra half-cylinder.
+    // -------------------------------
+    function createWorker(isKeen) {
+      const worker = new THREE.Group();
+      
+      // Randomly assign gender: ~33% chance to be female.
+      const isFemale = Math.random() < 0.33;
+      worker.userData.isFemale = isFemale;
+      
+      // Apply slight variation in overall height.
+      const scaleFactor = 0.9 + Math.random() * 0.2;
+      worker.scale.set(scaleFactor, scaleFactor, scaleFactor);
+      
+      const redColor = 0xff0000;
+      const skinColor = 0xffcc99;
+      
+      // Decide on long hair variant for females (50% chance among females)
+      const useLongHair = isFemale && Math.random() < 0.5;
+      
+      if (useLongHair) {
+        // Use a triangle-shaped torso for long-haired females.
+        const torsoShape = new THREE.Shape();
+        torsoShape.moveTo(-0.3, 0);
+        torsoShape.lineTo(0.3, 0);
+        torsoShape.lineTo(0, 1);
+        torsoShape.lineTo(-0.3, 0);
+        const extrudeSettings = { depth: 0.3, bevelEnabled: false };
+        const torsoGeom = new THREE.ExtrudeGeometry(torsoShape, extrudeSettings);
+        torsoGeom.center();
+        const torsoMat = new THREE.MeshStandardMaterial({ color: redColor });
+        const torso = new THREE.Mesh(torsoGeom, torsoMat);
+        torso.position.y = 1.1;
+        worker.add(torso);
+        
+        // Head.
+        const headGeom = new THREE.SphereGeometry(0.2, 32, 16);
+        const headMat = new THREE.MeshStandardMaterial({ color: skinColor });
+        const head = new THREE.Mesh(headGeom, headMat);
+        head.position.y = 1.8;
+        worker.add(head);
+        
+        // Standard hemisphere hair.
+        const hairGeom = new THREE.SphereGeometry(0.22, 32, 16, 0, Math.PI * 2, 0, Math.PI / 2);
+        const hairMat = new THREE.MeshStandardMaterial({ color: 0x333333 });
+        const hair = new THREE.Mesh(hairGeom, hairMat);
+        hair.position.y = 1.9;
+        worker.add(hair);
+        
+        // Long hair extension as a half-cylinder.
+        const longHairGeom = new THREE.CylinderGeometry(0.22, 0.22, 0.5, 32, 1, true, 0, Math.PI);
+        const longHairMat = new THREE.MeshStandardMaterial({ color: 0x333333, side: THREE.DoubleSide });
+        const longHair = new THREE.Mesh(longHairGeom, longHairMat);
+        // Use the fixed rotation and position.
+        longHair.rotation.y = Math.PI / 2;
+        longHair.position.set(0, 1.7, 0);
+        worker.add(longHair);
+      } else {
+        // Regular variant (male or standard female) with a standard high-res torso.
+        const torsoGeom = new THREE.BoxGeometry(0.6, 1, 0.3, 4, 4, 4);
+        const torsoMat = new THREE.MeshStandardMaterial({ color: redColor });
+        const torso = new THREE.Mesh(torsoGeom, torsoMat);
+        torso.position.y = 1;
+        worker.add(torso);
+        
+        // Head.
+        const headGeom = new THREE.SphereGeometry(0.2, 32, 16);
+        const headMat = new THREE.MeshStandardMaterial({ color: skinColor });
+        const head = new THREE.Mesh(headGeom, headMat);
+        head.position.y = 1.8;
+        worker.add(head);
+        
+        // Add hemisphere hair for everyone in this branch.
+        const hairGeom = new THREE.SphereGeometry(0.22, 32, 16, 0, Math.PI * 2, 0, Math.PI / 2);
+        const hairMat = new THREE.MeshStandardMaterial({ color: 0x333333 });
+        const hair = new THREE.Mesh(hairGeom, hairMat);
+        hair.position.y = 1.9;
+        worker.add(hair);
+      }
+      
+      // Arms.
+      const armGeom = new THREE.BoxGeometry(0.2, 0.8, 0.2, 2, 4, 2);
+      const armMat = new THREE.MeshStandardMaterial({ color: redColor });
+      const leftArm = new THREE.Mesh(armGeom, armMat);
+      leftArm.position.set(-0.5, 1, 0);
+      worker.add(leftArm);
+      const rightArm = new THREE.Mesh(armGeom, armMat);
+      rightArm.position.set(0.5, 1, 0);
+      worker.add(rightArm);
+      
+      // Legs.
+      const legGeom = new THREE.BoxGeometry(0.2, 0.8, 0.2, 2, 4, 2);
+      const legMat = new THREE.MeshStandardMaterial({ color: redColor });
+      const leftLeg = new THREE.Mesh(legGeom, legMat);
+      leftLeg.position.set(-0.2, 0.4, 0);
+      worker.add(leftLeg);
+      const rightLeg = new THREE.Mesh(legGeom, legMat);
+      rightLeg.position.set(0.2, 0.4, 0);
+      worker.add(rightLeg);
+      
+      // Set the "frother" flag for beer delivery.
+      worker.userData.frother = isKeen;
+      if (worker.userData.frother) {
+        const label = createLabel("I'm Keen");
+        label.position.set(0, 2.3, 0);
+        worker.userData.label = label;
+        scene.add(label);
+      }
+      
+      return worker;
+    }
+    
+    // -------------------------------
+    // Create Colleagues: 100 workers with exactly 21 keen workers.
+    // -------------------------------
+    const workers = [];
+    const indices = Array.from({ length: TOTAL_WORKERS }, (_, i) => i);
+    indices.sort(() => Math.random() - 0.5);
+    const keenIndices = new Set(indices.slice(0, KEEN_COUNT));
+    for (let i = 0; i < TOTAL_WORKERS; i++) {
+      const isKeen = keenIndices.has(i);
+      const worker = createWorker(isKeen);
+      worker.position.set(
+        Math.random() * 40 - 20,
+        0,
+        Math.random() * 40 - 20
+      );
+      worker.userData.served = false;
+      scene.add(worker);
+      workers.push(worker);
+    }
+    
+    // -------------------------------
+    // Game State & Movement Variables
+    // -------------------------------
+    let score = 0;
+    const scoreDisplay = document.getElementById('scoreDisplay');
+    scoreDisplay.textContent = "$0";
+    const move = { forward: false, backward: false, left: false, right: false };
+    const moveSpeed = 0.1;
+    let playerVelocity = new THREE.Vector3();
+    let yaw = 0, pitch = 0;
+    
+    // -------------------------------
+    // Countdown Timer Setup
+    // -------------------------------
+    const timerDisplay = document.getElementById('timerDisplay');
+    timerDisplay.textContent = "1:00";
+    function updateTimer() {
+      if (!startTime || gameOver) return;
+      const elapsed = (Date.now() - startTime) / 1000;
+      const timeLeft = Math.max(0, COUNTDOWN_SECONDS - elapsed);
+      const mins = Math.floor(timeLeft / 60);
+      const secs = Math.floor(timeLeft % 60);
+      timerDisplay.textContent = mins + ":" + (secs < 10 ? "0" : "") + secs;
+      if (timeLeft <= 0) {
+        endGameLose();
+      }
+    }
+    
+    // -------------------------------
+    // Beer in Hand (Viewmodel)
+    // -------------------------------
+    let playerBeer = null;
+    function spawnBeerInHand() {
+      if (gameOver) return;
+      playerBeer = createBeerObject();
+      camera.add(playerBeer);
+      scene.add(camera);
+      playerBeer.position.set(0.5, -0.6, -2.5);
+      playerBeer.scale.set(2, 2, 2);
+      playerBeer.traverse(child => {
+        if (child.material) {
+          child.material.depthTest = false;
+        }
+      });
+    }
+    spawnBeerInHand();
+    
+    // -------------------------------
+    // Pointer Lock & Timer Start
+    // -------------------------------
+    const canvasEl = renderer.domElement;
+    canvasEl.addEventListener('click', () => { canvasEl.requestPointerLock(); });
+    document.addEventListener('pointerlockchange', () => {
+      const overlay = document.getElementById('overlay');
+      if (document.pointerLockElement === canvasEl) {
+        overlay.style.display = 'none';
+        if (!startTime) startTime = Date.now();
+      } else {
+        if (!gameOver) overlay.style.display = 'block';
+      }
+    });
+    document.addEventListener('mousemove', (e) => {
+      if (document.pointerLockElement !== canvasEl) return;
+      yaw -= e.movementX * 0.002;
+      pitch -= e.movementY * 0.002;
+      pitch = Math.max(-Math.PI/2, Math.min(Math.PI/2, pitch));
+      camera.rotation.set(pitch, yaw, 0, 'ZYX');
+    });
+    
+    // -------------------------------
+    // Keyboard Controls (Movement & Beer Delivery)
+    // -------------------------------
+    document.addEventListener('keydown', (e) => {
+      if (e.code === 'KeyW') move.forward = true;
+      if (e.code === 'KeyS') move.backward = true;
+      if (e.code === 'KeyA') move.left = true;
+      if (e.code === 'KeyD') move.right = true;
+      if (e.code === 'Space') giveBeerToNearestWorker();
+    });
+    document.addEventListener('keyup', (e) => {
+      if (e.code === 'KeyW') move.forward = false;
+      if (e.code === 'KeyS') move.backward = false;
+      if (e.code === 'KeyA') move.left = false;
+      if (e.code === 'KeyD') move.right = false;
+    });
+    
+    // -------------------------------
+    // Update Labels: Update each keen worker's label position.
+    // -------------------------------
+    function updateLabels() {
+      workers.forEach(worker => {
+        if (worker.userData.label) {
+          const chestPos = new THREE.Vector3(0, 1, 0);
+          worker.localToWorld(chestPos);
+          const toCamera = new THREE.Vector3().subVectors(camera.position, chestPos).normalize();
+          const offset = toCamera.multiplyScalar(0.8);
+          const labelPos = chestPos.clone().add(offset);
+          worker.userData.label.position.copy(labelPos);
+        }
+      });
+    }
+    
+    // -------------------------------
+    // Beer Delivery: Only to Keen Workers.
+    // -------------------------------
+    function giveBeerToNearestWorker() {
+      if (!document.pointerLockElement || gameOver) return;
+      if (!playerBeer) return;
+      let closestDist = 4.0;
+      let closestWorker = null;
+      const playerPos = camera.position;
+      workers.forEach(w => {
+        if (!w.userData.frother) return;
+        if (w.userData.served) return;
+        const dist = playerPos.distanceTo(w.position);
+        if (dist < closestDist) {
+          closestDist = dist;
+          closestWorker = w;
+        }
+      });
+      if (closestWorker) {
+        closestWorker.userData.served = true;
+        score = (score === 0) ? 1000000 : score * 2;
+        scoreDisplay.textContent = "$" + score.toLocaleString();
+        const beerWorldPos = new THREE.Vector3();
+        playerBeer.getWorldPosition(beerWorldPos);
+        camera.remove(playerBeer);
+        const beer = playerBeer;
+        playerBeer = null;
+        beer.position.copy(beerWorldPos);
+        scene.add(beer);
+        const targetLocalPos = new THREE.Vector3(0, 2.2, 0);
+        const targetWorldPos = closestWorker.localToWorld(targetLocalPos.clone());
+        let frame = 0;
+        const startPos = beerWorldPos.clone();
+        const animInterval = setInterval(() => {
+          frame++;
+          beer.position.lerpVectors(startPos, targetWorldPos, frame / 15);
+          if (frame >= 15) {
+            clearInterval(animInterval);
+            scene.remove(beer);
+            closestWorker.add(beer);
+            beer.position.copy(targetLocalPos);
+          }
+        }, 16);
+        if (closestWorker.userData.label) {
+          scene.remove(closestWorker.userData.label);
+        }
+        const newLabel = createLabel("AI Frother");
+        closestWorker.userData.label = newLabel;
+        scene.add(newLabel);
+        let servedCount = workers.filter(w => w.userData.frother && w.userData.served).length;
+        if (servedCount >= KEEN_COUNT) {
+          endGameWin();
+        }
+        setTimeout(spawnBeerInHand, 1000);
+      }
+    }
+    
+    // -------------------------------
+    // Game Over (Win): Display "YOU WIN" and start cash rain.
+    // -------------------------------
+    function endGameWin() {
+      gameOver = true;
+      document.exitPointerLock();
+      const overlay = document.getElementById('overlay');
+      overlay.textContent = "YOU WIN";
+      overlay.style.fontSize = "4em";
+      overlay.style.display = "block";
+      startCashRain();
+    }
+    
+    // -------------------------------
+    // Game Over (Lose): Display losing message and start skull rain.
+    // -------------------------------
+    function endGameLose() {
+      gameOver = true;
+      document.exitPointerLock();
+      const overlay = document.getElementById('overlay');
+      overlay.innerHTML = "YOU LOSE. PREPARE TO BE PLUGGED INTO THE MATRIX.";
+      overlay.style.fontSize = "4em";
+      overlay.style.display = "block";
+      startSkullRain();
+    }
+    
+    // -------------------------------
+    // Cash Rain Effect for Win
+    // -------------------------------
+    function createCashDrop() {
+      const canvas = document.createElement("canvas");
+      canvas.width = 128;
+      canvas.height = 64;
+      const ctx = canvas.getContext("2d");
+      ctx.fillStyle = "gold";
+      ctx.font = "Bold 48px Arial";
+      ctx.textAlign = "center";
+      ctx.fillText("$", canvas.width / 2, canvas.height / 2 + 16);
+      const texture = new THREE.CanvasTexture(canvas);
+      const material = new THREE.SpriteMaterial({ map: texture, transparent: true });
+      const sprite = new THREE.Sprite(material);
+      sprite.scale.set(2, 1, 1);
+      return sprite;
+    }
+    
+    function startCashRain() {
+      for (let i = 0; i < 100; i++) {
+        const cash = createCashDrop();
+        cash.position.set(
+          Math.random() * 40 - 20,
+          Math.random() * 20 + 10,
+          Math.random() * 40 - 20
+        );
+        scene.add(cash);
+        cashDrops.push(cash);
+      }
+    }
+    
+    function updateCashRain() {
+      cashDrops.forEach(drop => {
+        drop.position.y -= 0.2;
+        if (drop.position.y < 0) {
+          drop.position.y = Math.random() * 10 + 10;
+          drop.position.x = Math.random() * 40 - 20;
+          drop.position.z = Math.random() * 40 - 20;
+        }
+      });
+    }
+    
+    // -------------------------------
+    // Skull Rain Effect for Lose
+    // -------------------------------
+    function createSkullDrop() {
+      const canvas = document.createElement("canvas");
+      canvas.width = 128;
+      canvas.height = 128;
+      const ctx = canvas.getContext("2d");
+      ctx.fillStyle = "black";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.fillStyle = "white";
+      ctx.font = "Bold 72px Arial";
+      ctx.textAlign = "center";
+      ctx.fillText("☠", canvas.width / 2, canvas.height / 2 + 24);
+      const texture = new THREE.CanvasTexture(canvas);
+      const material = new THREE.SpriteMaterial({ map: texture, transparent: true });
+      const sprite = new THREE.Sprite(material);
+      sprite.scale.set(2, 2, 1);
+      return sprite;
+    }
+    
+    function startSkullRain() {
+      for (let i = 0; i < 100; i++) {
+        const skull = createSkullDrop();
+        skull.position.set(
+          Math.random() * 40 - 20,
+          Math.random() * 20 + 10,
+          Math.random() * 40 - 20
+        );
+        scene.add(skull);
+        cashDrops.push(skull);
+      }
+    }
+    
+    // -------------------------------
+    // Animation Loop & Movement Update
+    // -------------------------------
+    function animate() {
+      requestAnimationFrame(animate);
+      playerVelocity.set(0, 0, 0);
+      if (move.forward) playerVelocity.z -= 1;
+      if (move.backward) playerVelocity.z += 1;
+      if (move.left) playerVelocity.x -= 1;
+      if (move.right) playerVelocity.x += 1;
+      playerVelocity.normalize().multiplyScalar(moveSpeed);
+      const direction = new THREE.Vector3(playerVelocity.x, 0, playerVelocity.z);
+      direction.applyAxisAngle(new THREE.Vector3(0,1,0), yaw);
+      camera.position.add(direction);
+      camera.position.x = Math.max(-24, Math.min(24, camera.position.x));
+      camera.position.z = Math.max(-24, Math.min(24, camera.position.z));
+      renderer.render(scene, camera);
+      updateLabels();
+      if (!gameOver) updateTimer();
+      if (gameOver) updateCashRain();
+    }
+    animate();
+    
+    window.addEventListener('resize', () => {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+    
+    // -------------------------------
+    // Lighting
+    // -------------------------------
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+    scene.add(ambientLight);
+    const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+    directionalLight.position.set(10, 20, 10);
+    scene.add(directionalLight);
+  </script>
+</body>
+</html>
